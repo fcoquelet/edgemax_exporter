@@ -2,7 +2,6 @@ package edgemax_exporter
 
 import (
 	"sync"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vaga/edgemax_exporter/edgemax"
 )
@@ -25,15 +24,15 @@ var _ prometheus.Collector = &Exporter{}
 const namespace = "edgemax"
 
 // New creates a new Exporter which collects metrics from one or mote sites.
-func New(client *edgemax.Client) (*Exporter, func(), error) {
+func New(client *edgemax.Client) (*Exporter, func() int, chan struct{}, error) {
 
 	systemCh := make(chan edgemax.SystemStat)
 	dpiCh := make(chan edgemax.DPIStat)
 	ifacesCh := make(chan edgemax.InterfacesStat)
 
-	done, err := client.Stats(systemCh, dpiCh, ifacesCh)
+	done, doneCh, err := client.Stats(systemCh, dpiCh, ifacesCh)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	return &Exporter{
@@ -42,7 +41,7 @@ func New(client *edgemax.Client) (*Exporter, func(), error) {
 			newDPICollector(dpiCh),
 			newInterfacesCollector(ifacesCh),
 		},
-	}, done, nil
+	}, done, doneCh, nil
 }
 
 // Describe sends all the descriptors of the collectors included to

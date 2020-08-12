@@ -67,13 +67,21 @@ func NewClient(addr string, client *http.Client) (*Client, error) {
 // Login authenticates against the EdgeMAX device using the specified username
 // and password. Login must be called and return a nil error before any
 // additional actions can be performed.
-func (c *Client) Login(username, password string) error {
+func (c *Client) Login(username, password string) (string) {
 	v := make(url.Values, 2)
 	v.Set("username", username)
 	v.Set("password", password)
-
-	_, err := c.client.PostForm(c.url.String(), v)
-	return err
+	resp, err := c.client.PostForm(c.url.String(), v)
+	if (err == nil) {
+		resp,err = c.client.Get(fmt.Sprintf("%s/api/edge/heartbeat.json",c.url.String()))
+	}
+	var reason string
+	if err != nil {
+		reason = err.Error()
+	} else if (resp.StatusCode != 200){
+		reason = resp.Status
+	}
+	return reason
 }
 
 // Stats opens a websocket connection to an EdgeMAX device to retrieve
@@ -82,10 +90,10 @@ func (c *Client) Stats(
 	systemCh chan<- SystemStat,
 	dpiCh chan<- DPIStat,
 	ifacesCh chan<- InterfacesStat,
-) (func(), error) {
+) (func() int, chan struct{},error) {
 	conn, err := c.dial()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var sessionID string
@@ -106,16 +114,19 @@ func (c *Client) Stats(
 			SessionID: sessionID,
 		},
 	)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	doneCh := make(chan struct{})
 	wg := new(sync.WaitGroup)
 
+	wg.Add(1)
 	go c.keepAlive(wg, doneCh)
+	wg.Add(1)
 	go c.read(conn, wg, doneCh, systemCh, dpiCh, ifacesCh)
-
-	return func() { close(doneCh); wg.Wait() }, nil
+	//There s no such thing as a graceful termination for Now
+	//Always exit in error
+	return func() int {wg.Wait();return -1}, doneCh, nil
 }
 
 // dial initializes the websocket used for Client.Stats
@@ -152,7 +163,6 @@ func (c *Client) read(
 	systemCh chan<- SystemStat, dpiCh chan<- DPIStat, ifacesCh chan<- InterfacesStat,
 ) {
 	defer conn.Close()
-	wg.Add(1)
 	defer wg.Done()
 
 	for {
@@ -163,6 +173,7 @@ func (c *Client) read(
 		}
 
 		_, m, err := conn.ReadMessage()
+
 		if err != nil {
 			log.Println("read:", err)
 			close(doneCh)
@@ -201,7 +212,6 @@ func (c *Client) read(
 // keepalive sends heartbeat requests at regular intervals to the EdgeMAX
 // device to keep a session active while Client.Stats is running.
 func (c *Client) keepAlive(wg *sync.WaitGroup, doneCh chan struct{}) {
-	wg.Add(1)
 	defer wg.Done()
 
 	for {

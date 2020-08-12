@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"os"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vaga/edgemax_exporter"
 	"github.com/vaga/edgemax_exporter/edgemax"
 )
@@ -39,28 +41,32 @@ func main() {
 	if err != nil {
 		log.Fatalf("cannot create EdgeMAX Controller client: %v", err)
 	}
-	if err := c.Login(*username, *password); err != nil {
-		log.Fatalln("failed to authenticate to EdgeMAX Controller: %v", err)
+	if reason:=c.Login(*username, *password); reason != "" {
+		log.Fatalln("failed to authenticate to EdgeMAX Controller:",reason)
 	}
 
-	e, done, err := edgemax_exporter.New(c)
+	e, done, doneCh, err := edgemax_exporter.New(c)
 	if err != nil {
-		log.Fatalln("cannot create EdgeMAX Controller exporter: %v", err)
+		log.Fatalln("cannot create EdgeMAX Controller exporter:", err)
 	}
-	defer done()
 
 	prometheus.MustRegister(e)
-	http.Handle(*metricsPath, prometheus.Handler())
+	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
 	})
 
-	log.Printf("Starting EdgeMAX exporter on %q for device at %q", *listenAddress, *address)
 
-	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
-		log.Printf("cannot start EdgeMAX exporter: %s", err)
-		return
-	}
+	//Go routine for the HTTP server, not sync'ed via the waitgroup due to its blocking status
+	go func() {
+		log.Printf("Starting EdgeMAX exporter on %q for device at %q", *listenAddress, *address)
+		if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+		 log.Printf("cannot start EdgeMAX exporter: %s", err)
+		 close(doneCh)
+		 return
+	 }
+	 }()
+	os.Exit(done())
 }
 
 func newHTTPClient(timeout time.Duration, insecure bool) *http.Client {
